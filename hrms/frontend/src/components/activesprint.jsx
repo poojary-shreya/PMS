@@ -11,8 +11,6 @@ import {
   Divider,
   IconButton,
   CircularProgress,
-  Switch,
-  FormControlLabel,
   Dialog,
   DialogTitle,
   DialogContent,
@@ -32,6 +30,7 @@ import {
   Refresh as RefreshIcon
 } from '@mui/icons-material';
 
+// Make sure this is correctly configured in your environment
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
 
 const ActiveSprints = ({ projectKey }) => {
@@ -45,28 +44,45 @@ const ActiveSprints = ({ projectKey }) => {
     severity: 'info'
   });
 
+  // Fetch sprints when component mounts or projectKey changes
   useEffect(() => {
-    fetchSprints();
+    if (projectKey) {
+      fetchSprints();
+    } else {
+      setError("No project key provided");
+      setLoading(false);
+    }
   }, [projectKey]);
 
   const fetchSprints = async () => {
     try {
       setLoading(true);
+      setError(null);
       
-      // Fetch from API with error handling
-      const response = await fetch(`${API_BASE_URL}/api/sprints/project/${projectKey}`);
+      console.log(`Fetching sprints for project: ${projectKey}`);
+      
+      // Ensure we're using the correct endpoint with proper error handling
+      const response = await fetch(`${API_BASE_URL}/api/sprints/project/${projectKey}`, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+        },
+      });
       
       if (!response.ok) {
-        throw new Error(`API responded with status ${response.status}`);
+        const errorText = await response.text();
+        console.error('API Error Response:', errorText);
+        throw new Error(`API responded with status ${response.status}: ${errorText}`);
       }
       
       const data = await response.json();
+      console.log('API Response:', data);
       
       if (data && data.success) {
-        setSprints(data.data);
-        setError(null);
+        setSprints(data.data || []);
       } else {
-        throw new Error(data?.message || 'Unknown error');
+        throw new Error(data?.message || 'Unknown error occurred');
       }
     } catch (apiError) {
       console.error('Error fetching sprints:', apiError);
@@ -92,15 +108,50 @@ const ActiveSprints = ({ projectKey }) => {
     setSnackbar(prev => ({ ...prev, open: false }));
   };
 
-  const handleSprintCreated = (newSprint) => {
-    // Add the new sprint to the existing sprints
-    setSprints(prevSprints => [...prevSprints, newSprint]);
-    showSnackbar('Sprint created successfully', 'success');
+  // Handle creating a new sprint
+  const handleCreateSprint = async (newSprintData) => {
+    try {
+      setLoading(true);
+      
+      const response = await fetch(`${API_BASE_URL}/api/sprints`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          ...newSprintData,
+          projectKey
+        }),
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`API responded with status ${response.status}: ${errorText}`);
+      }
+      
+      const result = await response.json();
+      
+      if (result && result.success) {
+        // Add the new sprint to the existing sprints
+        setSprints(prevSprints => [...prevSprints, result.data]);
+        showSnackbar('Sprint created successfully', 'success');
+        return result.data;
+      } else {
+        throw new Error(result?.message || 'Unknown error creating sprint');
+      }
+    } catch (error) {
+      console.error('Error creating sprint:', error);
+      showSnackbar(`Error creating sprint: ${error.message}`, 'error');
+      throw error;
+    } finally {
+      setLoading(false);
+    }
   };
 
+  // Handle sprint status change
   const handleChangeStatus = async (sprintId, newStatus) => {
     try {
-      // API call
+      // API call with proper error handling
       const response = await fetch(`${API_BASE_URL}/api/sprints/${sprintId}/status`, {
         method: 'PATCH',
         headers: {
@@ -110,14 +161,28 @@ const ActiveSprints = ({ projectKey }) => {
       });
       
       if (!response.ok) {
-        throw new Error(`API responded with status ${response.status}`);
+        const errorText = await response.text();
+        throw new Error(`API responded with status ${response.status}: ${errorText}`);
       }
       
-      fetchSprints(); // Refresh sprints after status change
-      showSnackbar(`Sprint status updated to ${newStatus.toLowerCase()}`, 'success');
+      const result = await response.json();
+      
+      if (result && result.success) {
+        // Update the sprint in our local state to avoid a full refetch
+        setSprints(prevSprints => 
+          prevSprints.map(sprint => 
+            sprint.id === sprintId ? { ...sprint, status: newStatus } : sprint
+          )
+        );
+        showSnackbar(`Sprint status updated to ${newStatus.toLowerCase()}`, 'success');
+      } else {
+        throw new Error(result?.message || 'Unknown error updating sprint status');
+      }
     } catch (error) {
       console.error('Error changing sprint status:', error);
       showSnackbar(`Error updating sprint status: ${error.message}`, 'error');
+      // Now refetch to ensure we're in sync with backend
+      fetchSprints();
     }
   };
 
@@ -134,7 +199,11 @@ const ActiveSprints = ({ projectKey }) => {
   };
 
   const formatDate = (dateString) => {
+    if (!dateString) return 'N/A';
+    
     const date = new Date(dateString);
+    if (isNaN(date.getTime())) return 'Invalid Date';
+    
     const month = date.toLocaleString('default', { month: 'short' });
     const day = date.getDate();
     const year = date.getFullYear();
@@ -244,18 +313,28 @@ const ActiveSprints = ({ projectKey }) => {
     </Paper>
   );
 
+  // Create a mock new sprint for the placeholder functionality
+  const createMockSprint = () => {
+    const now = new Date();
+    const startDate = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000); // 2 weeks in future
+    const endDate = new Date(now.getTime() + 28 * 24 * 60 * 60 * 1000);   // 4 weeks in future
+    
+    return {
+      name: `Sprint ${sprints.length + 1}`,
+      goal: 'New sprint goal',
+      startDate: startDate.toISOString(),
+      endDate: endDate.toISOString(),
+      duration: 2,
+      projectKey: projectKey,
+      status: 'FUTURE'
+    };
+  };
+
   return (
     <Box sx={{ p: 3 }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 4 }}>
-        <Typography variant="h4" component="h1">Active Sprints</Typography>
-        <Button
-          variant="contained"
-          color="primary"
-          startIcon={<AddIcon />}
-          onClick={() => setCreateDialogOpen(true)}
-        >
-          Create Sprint
-        </Button>
+        <Typography variant="h4" component="h1">Active Sprints </Typography>
+       
       </Box>
 
       {error && (
@@ -351,7 +430,8 @@ const ActiveSprints = ({ projectKey }) => {
         <DialogTitle>Create New Sprint</DialogTitle>
         <DialogContent>
           <DialogContentText>
-            This is a placeholder for the CreateSprint component.
+            This is a placeholder for the CreateSprint component. In a real implementation, 
+            this would be a form to enter sprint details.
           </DialogContentText>
         </DialogContent>
         <DialogActions>
@@ -361,20 +441,19 @@ const ActiveSprints = ({ projectKey }) => {
           <Button 
             variant="contained" 
             color="primary"
-            onClick={() => {
-              // Here you would implement the actual sprint creation
-              // This is just a placeholder
-              const newSprint = {
-                id: `sprint-${Date.now()}`,
-                name: `Sprint ${sprints.length + 1}`,
-                goal: 'New sprint goal',
-                status: 'FUTURE',
-                startDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
-                endDate: new Date(Date.now() + 28 * 24 * 60 * 60 * 1000).toISOString(),
-                duration: 2
-              };
-              handleSprintCreated(newSprint);
-              setCreateDialogOpen(false);
+            onClick={async () => {
+              try {
+                // Create a mock sprint for demo purposes
+                const mockSprintData = createMockSprint();
+                
+                // In a real app, this would come from a form
+                await handleCreateSprint(mockSprintData);
+                
+                setCreateDialogOpen(false);
+              } catch (error) {
+                console.error("Failed to create sprint:", error);
+                // Error is already handled by handleCreateSprint
+              }
             }}
           >
             Create Sprint

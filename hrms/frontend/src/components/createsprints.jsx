@@ -1,73 +1,102 @@
-import React, { useState, useEffect } from 'react';
-import {
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
-  TextField,
-  Button,
+import React, { useState } from 'react';
+import { 
+  Dialog, 
+  DialogTitle, 
+  DialogContent, 
+  DialogActions, 
+  Button, 
+  TextField, 
+  FormControl,
+  Grid,
   Typography,
   Box,
-  Grid,
-  FormControl,
+  FormHelperText,
+  InputLabel,
   Select,
   MenuItem,
-  FormHelperText,
-  IconButton,
-  CircularProgress
+  Snackbar,
+  Alert
 } from '@mui/material';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
-import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
-import CloseIcon from '@mui/icons-material/Close';
+import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
 import axios from 'axios';
 
-const CreateSprint = ({ projectKey, onSprintCreated, openDialog, onClose }) => {
-  const [open, setOpen] = useState(false);
-  const [sprintName, setSprintName] = useState('');
-  const [sprintGoal, setSprintGoal] = useState('');
-  const [startDate, setStartDate] = useState(null);
-  const [endDate, setEndDate] = useState(null);
-  const [duration, setDuration] = useState(2);
+const CreateSprint = ({ projectKey, openDialog, onClose }) => {
+  const [formData, setFormData] = useState({
+    name: '',
+    goal: '',
+    startDate: null,
+    endDate: null,
+    duration: 2, // Default 2 weeks
+    status: 'FUTURE',
+    projectKey: projectKey || ''
+  });
+  
   const [errors, setErrors] = useState({});
-  const [loading, setLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [notification, setNotification] = useState({
+    open: false,
+    message: '',
+    severity: 'success'
+  });
 
-  // Effect to control dialog state from parent component
-  useEffect(() => {
-    setOpen(openDialog);
-  }, [openDialog]);
+  // Calculate end date based on start date and duration
+  const calculateEndDate = (startDate, durationWeeks) => {
+    if (!startDate) return null;
+    
+    const date = new Date(startDate);
+    date.setDate(date.getDate() + (durationWeeks * 7));
+    return date;
+  };
 
-  const handleClose = () => {
-    setOpen(false);
-    resetForm();
-    if (onClose) {
-      onClose();
+  const handleChange = (e) => {
+    const { name, value } = e.target;
+    setFormData({
+      ...formData,
+      [name]: value
+    });
+    
+    // If changing duration, recalculate end date
+    if (name === 'duration' && formData.startDate) {
+      setFormData(prev => ({
+        ...prev,
+        endDate: calculateEndDate(prev.startDate, value)
+      }));
     }
   };
 
-  const resetForm = () => {
-    setSprintName('');
-    setSprintGoal('');
-    setStartDate(null);
-    setEndDate(null);
-    setDuration(2);
-    setErrors({});
+  const handleDateChange = (field, date) => {
+    setFormData({
+      ...formData,
+      [field]: date
+    });
+    
+    // If changing start date, recalculate end date
+    if (field === 'startDate') {
+      setFormData(prev => ({
+        ...prev,
+        endDate: calculateEndDate(date, prev.duration)
+      }));
+    }
   };
 
-  const validateForm = () => {
+  const validate = () => {
     const newErrors = {};
     
-    if (!sprintName.trim()) {
-      newErrors.sprintName = 'Sprint name is required';
+    if (!formData.name.trim()) {
+      newErrors.name = 'Sprint name is required';
     }
     
-    if (!startDate) {
+    if (!formData.startDate) {
       newErrors.startDate = 'Start date is required';
     }
     
-    if (!endDate) {
+    if (!formData.endDate) {
       newErrors.endDate = 'End date is required';
-    } else if (startDate && endDate < startDate) {
+    }
+    
+    if (formData.startDate && formData.endDate && formData.startDate > formData.endDate) {
       newErrors.endDate = 'End date must be after start date';
     }
     
@@ -76,222 +105,202 @@ const CreateSprint = ({ projectKey, onSprintCreated, openDialog, onClose }) => {
   };
 
   const handleSubmit = async () => {
-    if (validateForm()) {
-      try {
-        setLoading(true);
-        
-        // Create sprint object
-        const newSprint = {
-          name: sprintName,
-          goal: sprintGoal,
-          startDate,
-          endDate,
-          duration,
-          projectKey,
-          status: 'FUTURE'
-        };
-
-        // Make API call to create sprint
-        const response = await axios.post(
-          'http://localhost:5000/api/sprints', 
-          newSprint
-        );
-        
-        if (response.data && response.data.status === 'success') {
-          // Notify parent component with the created sprint from the server
-          if (onSprintCreated) {
-            onSprintCreated(response.data.data);
-          }
-          
-          handleClose();
-        } else {
-          setErrors({ form: 'Failed to create sprint' });
-        }
-      } catch (error) {
-        console.error('Error creating sprint:', error);
-        setErrors({ 
-          form: error.response?.data?.message || 'Failed to create sprint'
+    if (!validate()) return;
+    
+    try {
+      setIsLoading(true);
+      
+      const payload = {
+        ...formData,
+        projectKey: projectKey
+      };
+      
+      const response = await axios.post('http://localhost:5000/api/sprints', payload);
+      
+      if (response.data && response.data.success) {
+        setNotification({
+          open: true,
+          message: 'Sprint created successfully',
+          severity: 'success'
         });
-      } finally {
-        setLoading(false);
+        
+        // Reset form
+        setFormData({
+          name: '',
+          goal: '',
+          startDate: null,
+          endDate: null,
+          duration: 2,
+          status: 'FUTURE',
+          projectKey: projectKey || ''
+        });
+        
+        // Close dialog after successful creation
+        setTimeout(() => {
+          onClose();
+        }, 1000);
       }
+    } catch (error) {
+      console.error('Error creating sprint:', error);
+      setNotification({
+        open: true,
+        message: error.response?.data?.message || 'Error creating sprint',
+        severity: 'error'
+      });
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  const calculateEndDate = (start, weeks) => {
-    if (!start) return;
-    const end = new Date(start);
-    end.setDate(end.getDate() + (weeks * 7));
-    setEndDate(end);
-  };
-
-  const handleStartDateChange = (date) => {
-    setStartDate(date);
-    if (duration) {
-      calculateEndDate(date, duration);
-    }
-  };
-
-  const handleDurationChange = (e) => {
-    const newDuration = e.target.value;
-    setDuration(newDuration);
-    if (startDate) {
-      calculateEndDate(startDate, newDuration);
-    }
+  const handleCloseNotification = () => {
+    setNotification({ ...notification, open: false });
   };
 
   return (
-    <Dialog 
-      open={open} 
-      onClose={handleClose}
-      maxWidth="md"
-      fullWidth
-    >
-      <DialogTitle sx={{ borderBottom: '1px solid #dfe1e6', p: 2 }}>
-        <Box display="flex" justifyContent="space-between" alignItems="center">
-          <Typography variant="h6" component="div" fontWeight={500}>
-            Create Sprint
-          </Typography>
-          <IconButton onClick={handleClose} size="small">
-            <CloseIcon fontSize="small" />
-          </IconButton>
-        </Box>
-      </DialogTitle>
-
-      <DialogContent sx={{ pt: 3 }}>
-        {errors.form && (
-          <Box sx={{ mb: 2 }}>
-            <Typography variant="body2" color="error">
-              {errors.form}
-            </Typography>
-          </Box>
-        )}
-        
-        <Grid container spacing={3}>
-          <Grid item xs={12}>
-            <TextField
-              label="Sprint name"
-              variant="outlined"
-              fullWidth
-              required
-              value={sprintName}
-              onChange={(e) => setSprintName(e.target.value)}
-              error={!!errors.sprintName}
-              helperText={errors.sprintName}
-              autoFocus
-              placeholder="e.g. Sprint 1"
-              disabled={loading}
-            />
-          </Grid>
-
-          <Grid item xs={12}>
-            <TextField
-              label="Sprint goal"
-              variant="outlined"
-              fullWidth
-              multiline
-              rows={3}
-              value={sprintGoal}
-              onChange={(e) => setSprintGoal(e.target.value)}
-              placeholder="What do you want to achieve in this sprint?"
-              disabled={loading}
-            />
-          </Grid>
-
-          <Grid item xs={12}>
-            <Typography variant="subtitle2" gutterBottom>
-              Duration
-            </Typography>
-            <Box display="flex" alignItems="center" gap={2}>
-              <FormControl variant="outlined" sx={{ minWidth: 120 }} error={!!errors.duration}>
-                <Select
-                  value={duration}
-                  onChange={handleDurationChange}
-                  displayEmpty
-                  disabled={loading}
-                >
-                  <MenuItem value={1}>1 week</MenuItem>
-                  <MenuItem value={2}>2 weeks</MenuItem>
-                  <MenuItem value={3}>3 weeks</MenuItem>
-                  <MenuItem value={4}>4 weeks</MenuItem>
-                  <MenuItem value={6}>6 weeks</MenuItem>
-                </Select>
-                {errors.duration && <FormHelperText>{errors.duration}</FormHelperText>}
-              </FormControl>
-              <Typography variant="body2" color="textSecondary">
-                Custom
-              </Typography>
-            </Box>
-          </Grid>
-
-          <Grid item xs={12}>
-            <Typography variant="subtitle2" gutterBottom>
-              Dates
-            </Typography>
-            <Grid container spacing={2}>
+    <>
+      <Dialog 
+        open={openDialog} 
+        onClose={onClose}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle>Create Sprint</DialogTitle>
+        <DialogContent>
+          <Box sx={{ mt: 2 }}>
+            <Grid container spacing={3}>
+              <Grid item xs={12}>
+                <TextField
+                  name="name"
+                  label="Sprint Name"
+                  value={formData.name}
+                  onChange={handleChange}
+                  fullWidth
+                  required
+                  error={!!errors.name}
+                  helperText={errors.name}
+                  placeholder={`${projectKey} Sprint 1`}
+                />
+              </Grid>
+              
+              <Grid item xs={12}>
+                <TextField
+                  name="goal"
+                  label="Sprint Goal"
+                  value={formData.goal}
+                  onChange={handleChange}
+                  fullWidth
+                  multiline
+                  rows={3}
+                  placeholder="What do you want to achieve in this sprint?"
+                />
+              </Grid>
+              
               <Grid item xs={12} sm={6}>
                 <LocalizationProvider dateAdapter={AdapterDateFns}>
                   <DatePicker
-                    label="Start date"
-                    value={startDate}
-                    onChange={handleStartDateChange}
-                    slotProps={{
-                      textField: {
-                        fullWidth: true,
-                        error: !!errors.startDate,
-                        helperText: errors.startDate,
-                        disabled: loading
-                      }
-                    }}
+                    label="Start Date"
+                    value={formData.startDate}
+                    onChange={(date) => handleDateChange('startDate', date)}
+                    renderInput={(params) => (
+                      <TextField
+                        {...params}
+                        fullWidth
+                        required
+                        error={!!errors.startDate}
+                        helperText={errors.startDate}
+                      />
+                    )}
                   />
                 </LocalizationProvider>
               </Grid>
+              
+              <Grid item xs={12} sm={6}>
+                <FormControl fullWidth>
+                  <InputLabel id="duration-label">Duration (weeks)</InputLabel>
+                  <Select
+                    labelId="duration-label"
+                    name="duration"
+                    value={formData.duration}
+                    onChange={handleChange}
+                    label="Duration (weeks)"
+                  >
+                    {[1, 2, 3, 4, 6, 8].map(weeks => (
+                      <MenuItem key={weeks} value={weeks}>
+                        {weeks} {weeks === 1 ? 'week' : 'weeks'}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              </Grid>
+              
               <Grid item xs={12} sm={6}>
                 <LocalizationProvider dateAdapter={AdapterDateFns}>
                   <DatePicker
-                    label="End date"
-                    value={endDate}
-                    onChange={(date) => setEndDate(date)}
-                    slotProps={{
-                      textField: {
-                        fullWidth: true,
-                        error: !!errors.endDate,
-                        helperText: errors.endDate,
-                        disabled: loading
-                      }
-                    }}
+                    label="End Date"
+                    value={formData.endDate}
+                    onChange={(date) => handleDateChange('endDate', date)}
+                    renderInput={(params) => (
+                      <TextField
+                        {...params}
+                        fullWidth
+                        required
+                        error={!!errors.endDate}
+                        helperText={errors.endDate}
+                      />
+                    )}
+                    readOnly
                   />
                 </LocalizationProvider>
+                <FormHelperText>End date is calculated based on start date and duration</FormHelperText>
+              </Grid>
+              
+              <Grid item xs={12} sm={6}>
+                <FormControl fullWidth>
+                  <InputLabel id="status-label">Status</InputLabel>
+                  <Select
+                    labelId="status-label"
+                    name="status"
+                    value={formData.status}
+                    onChange={handleChange}
+                    label="Status"
+                  >
+                    <MenuItem value="FUTURE">Future</MenuItem>
+                    <MenuItem value="ACTIVE">Active</MenuItem>
+                    <MenuItem value="COMPLETED">Completed</MenuItem>
+                  </Select>
+                </FormControl>
               </Grid>
             </Grid>
-          </Grid>
-        </Grid>
-      </DialogContent>
-
-      <DialogActions sx={{ p: 2, borderTop: '1px solid #dfe1e6' }}>
-        <Button 
-          onClick={handleClose} 
-          color="inherit"
-          disabled={loading}
+          </Box>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 3 }}>
+          <Button onClick={onClose} variant="outlined">Cancel</Button>
+          <Button 
+            onClick={handleSubmit}
+            variant="contained"
+            color="primary"
+            disabled={isLoading}
+          >
+            {isLoading ? 'Creating...' : 'Create Sprint'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+      
+      <Snackbar 
+        open={notification.open} 
+        autoHideDuration={6000} 
+        onClose={handleCloseNotification}
+        anchorOrigin={{ vertical: 'top', horizontal: 'right' }}
+      >
+        <Alert 
+          onClose={handleCloseNotification} 
+          severity={notification.severity} 
+          sx={{ width: '100%' }}
         >
-          Cancel
-        </Button>
-        <Button 
-          variant="contained" 
-          onClick={handleSubmit}
-          disabled={loading}
-          sx={{
-            bgcolor: '#0052CC',
-            '&:hover': {
-              bgcolor: '#0747A6'
-            }
-          }}
-          startIcon={loading ? <CircularProgress size={20} color="inherit" /> : null}
-        >
-          {loading ? 'Creating...' : 'Create'}
-        </Button>
-      </DialogActions>
-    </Dialog>
+          {notification.message}
+        </Alert>
+      </Snackbar>
+    </>
   );
 };
 

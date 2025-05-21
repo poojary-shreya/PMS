@@ -37,7 +37,7 @@ import {
   Collapse,
 } from '@mui/material';
 import axios from 'axios';
-// import CreateSprint from './createsprints.jsx';
+import CreateSprint from './createsprints.jsx';
 const Backlogpage = () => {
   const navigate = useNavigate();
   const { projectId } = useParams(); // Get projectId from URL params
@@ -77,9 +77,7 @@ const Backlogpage = () => {
   const [anchorEl, setAnchorEl] = useState(null);
   const [toast, setToast] = useState({ open: false, message: '', type: 'info' });
   const [draggingIssue, setDraggingIssue] = useState(null);
-  const [sprints, setSprints] = useState([
-   
-  ]);
+  const [sprints, setSprints] = useState([]);
   const [backlogExpanded, setBacklogExpanded] = useState(true);
   const open = Boolean(anchorEl);
   
@@ -142,7 +140,45 @@ const Backlogpage = () => {
     fetchIssues();
   }, [projectId]);
 
-
+  // Fetch sprints for the project
+  useEffect(() => {
+    const fetchSprints = async () => {
+      if (!projectDetails?.key) return;
+      
+      try {
+        const response = await axios.get(`http://localhost:5000/api/sprints/project/${projectDetails.key}`);
+        if (response.data && response.data.data) {
+          // Add expanded property to each sprint
+          const sprintsWithExpanded = response.data.data.map(sprint => ({
+            ...sprint,
+            expanded: true,
+            issues: [] // Initialize with empty issues array
+          }));
+          setSprints(sprintsWithExpanded);
+          
+          // For each sprint, fetch its issues
+          sprintsWithExpanded.forEach(async (sprint) => {
+            try {
+              const issuesResponse = await axios.get(`http://localhost:5000/api/sprints/${sprint.id}/issues`);
+              if (issuesResponse.data && issuesResponse.data.data) {
+                setSprints(prevSprints => 
+                  prevSprints.map(s => 
+                    s.id === sprint.id ? { ...s, issues: issuesResponse.data.data } : s
+                  )
+                );
+              }
+            } catch (err) {
+              console.error(`Error fetching issues for sprint ${sprint.id}:`, err);
+            }
+          });
+        }
+      } catch (err) {
+        console.error('Error fetching sprints:', err);
+      }
+    };
+    
+    fetchSprints();
+  }, [projectDetails]);
   
   // Helper components
   const IssueTypeIcon = ({ type }) => {
@@ -172,34 +208,35 @@ const Backlogpage = () => {
     ) : null;
   };
 
-    // Handle opening the sprint creation dialog
-    const handleOpenSprintDialog = () => {
-      setSprintDialogOpen(true);
+  // Handle opening the sprint creation dialog
+  const handleOpenSprintDialog = () => {
+    setSprintDialogOpen(true);
+  };
+
+  // Handle closing the sprint creation dialog
+  const handleCloseSprintDialog = () => {
+    setSprintDialogOpen(false);
+  };
+
+  // Handle sprint creation
+  const handleSprintCreated = (newSprint) => {
+    // Add the new sprint to the sprints array
+    const sprintWithIssues = {
+      ...newSprint,
+      issues: [],
+      expanded: true,
+      id: newSprint.id || (sprints.length > 0 ? Math.max(...sprints.map(s => s.id)) + 1 : 1)
     };
+    
+    setSprints([...sprints, sprintWithIssues]);
+    
+    setToast({
+      open: true,
+      message: `${newSprint.name} created`,
+      type: 'success'
+    });
+  };
   
-    // Handle closing the sprint creation dialog
-    const handleCloseSprintDialog = () => {
-      setSprintDialogOpen(false);
-    };
-  
-    // Handle sprint creation
-    // const handleSprintCreated = (newSprint) => {
-    //   // Add the new sprint to the sprints array
-    //   const sprintWithIssues = {
-    //     ...newSprint,
-    //     issues: [],
-    //     expanded: true,
-    //     id: sprints.length > 0 ? Math.max(...sprints.map(s => s.id)) + 1 : 1
-    //   };
-      
-    //   setSprints([...sprints, sprintWithIssues]);
-      
-    //   setToast({
-    //     open: true,
-    //     message: `${newSprint.name} created`,
-    //     type: 'success'
-    //   });
-    // };
   // Filter issues based on search query and active filter
   useEffect(() => {
     if (!issues.length) return;
@@ -299,6 +336,24 @@ const Backlogpage = () => {
     e.preventDefault();
     // Logic to move issue to backlog
     if (draggingIssue) {
+      // Find issue in any sprint
+      let issueFound = false;
+      let sprintId = null;
+      
+      // Find which sprint the issue is in
+      sprints.forEach(sprint => {
+        const issueIndex = sprint.issues.findIndex(issue => issue.id === draggingIssue);
+        if (issueIndex !== -1) {
+          issueFound = true;
+          sprintId = sprint.id;
+        }
+      });
+      
+      if (issueFound && sprintId) {
+        // Remove issue from sprint
+        removeIssueFromSprint(draggingIssue, sprintId);
+      }
+      
       setToast({
         open: true,
         message: 'Issue moved to Backlog',
@@ -308,24 +363,116 @@ const Backlogpage = () => {
     }
   };
 
+  // Remove issue from sprint (API call)
+  const removeIssueFromSprint = async (issueId, sprintId) => {
+    try {
+      const issue = issues.find(issue => issue.id === issueId);
+      if (!issue) return;
+      
+      // Call API to remove issue from sprint
+      await axios.delete(`http://localhost:5000/api/sprints/remove-issue/${issue.key}`);
+      
+      // Update local state
+      setSprints(prevSprints => 
+        prevSprints.map(sprint => {
+          if (sprint.id === sprintId) {
+            return {
+              ...sprint,
+              issues: sprint.issues.filter(issue => issue.id !== issueId)
+            };
+          }
+          return sprint;
+        })
+      );
+    } catch (err) {
+      console.error('Error removing issue from sprint:', err);
+      setToast({
+        open: true,
+        message: 'Failed to remove issue from sprint',
+        type: 'error'
+      });
+    }
+  };
+
   // Handle drop on sprint 
-  const handleDropOnSprint = (e, sprintId) => {
+  const handleDropOnSprint = async (e, sprintId) => {
     e.preventDefault();
     if (draggingIssue) {
       // Find the issue being dragged
-      const draggedIssue = filteredIssues.find(issue => issue.id === draggingIssue);
+      const draggedIssue = issues.find(issue => issue.id === draggingIssue);
       if (!draggedIssue) return;
 
-      // Add issue to sprint
+      try {
+        // Call API to add issue to sprint
+        await axios.post('http://localhost:5000/api/sprints/add-issue', {
+          issueKey: draggedIssue.key,
+          sprintId: sprintId
+        });
+        
+        // If issue was in another sprint, remove it first
+        sprints.forEach(sprint => {
+          if (sprint.id !== sprintId) {
+            const issueInOtherSprint = sprint.issues.find(issue => issue.id === draggingIssue);
+            if (issueInOtherSprint) {
+              removeIssueFromSprint(draggingIssue, sprint.id);
+            }
+          }
+        });
+        
+        // Add issue to sprint in local state
+        setSprints(prevSprints => 
+          prevSprints.map(sprint => {
+            if (sprint.id === sprintId) {
+              const alreadyInSprint = sprint.issues.some(issue => issue.id === draggingIssue);
+              if (!alreadyInSprint) {
+                return {
+                  ...sprint,
+                  issues: [...sprint.issues, draggedIssue]
+                };
+              }
+            }
+            return sprint;
+          })
+        );
+        
+        setToast({
+          open: true,
+          message: `Issue moved to ${sprints.find(s => s.id === sprintId)?.name || 'Sprint'}`,
+          type: 'success'
+        });
+      } catch (err) {
+        console.error('Error adding issue to sprint:', err);
+        setToast({
+          open: true,
+          message: 'Failed to add issue to sprint',
+          type: 'error'
+        });
+      }
+      
+      setDraggingIssue(null);
+    }
+  };
+
+  // Create new sprint
+  const createSprint = () => {
+    handleOpenSprintDialog();
+  };
+
+  // Start sprint
+  const startSprint = async (sprintId) => {
+    try {
+      // Call API to change sprint status
+      await axios.patch(`http://localhost:5000/api/sprints/${sprintId}/status`, {
+        status: 'ACTIVE'
+      });
+      
+      // Update local state
       const updatedSprints = sprints.map(sprint => {
         if (sprint.id === sprintId) {
-          const alreadyInSprint = sprint.issues.some(issue => issue.id === draggingIssue);
-          if (!alreadyInSprint) {
-            return {
-              ...sprint,
-              issues: [...sprint.issues, draggedIssue]
-            };
-          }
+          return {
+            ...sprint,
+            status: 'ACTIVE'
+          };
         }
         return sprint;
       });
@@ -334,67 +481,30 @@ const Backlogpage = () => {
       
       setToast({
         open: true,
-        message: `Issue moved to ${sprints.find(s => s.id === sprintId)?.name || 'Sprint'}`,
+        message: `${sprints.find(s => s.id === sprintId)?.name || 'Sprint'} started`,
         type: 'success'
       });
-      
-      setDraggingIssue(null);
+    } catch (err) {
+      console.error('Error starting sprint:', err);
+      setToast({
+        open: true,
+        message: 'Failed to start sprint',
+        type: 'error'
+      });
     }
   };
 
-  // Create new sprint
-  // const createSprint = () => {
-  //   handleOpenSprintDialog();
-  //   const newSprintId = sprints.length > 0 ? Math.max(...sprints.map(s => s.id)) + 1 : 1;
-  //   const newSprint = {
-  //     id: newSprintId,
-  //     name: `${projectDetails?.key || 'AGSP'} Sprint ${newSprintId}`,
-  //     status: 'planning',
-  //     issues: [],
-  //     expanded: true
-  //   };
-    
-  //   setSprints([...sprints, newSprint]);
-    
-  //   setToast({
-  //     open: true,
-  //     message: `${newSprint.name} created`,
-  //     type: 'success'
-  //   });
-  // };
-
-  // Start sprint
-  // const startSprint = (sprintId) => {
-  //   const updatedSprints = sprints.map(sprint => {
-  //     if (sprint.id === sprintId) {
-  //       return {
-  //         ...sprint,
-  //         status: 'active'
-  //       };
-  //     }
-  //     return sprint;
-  //   });
-    
-  //   setSprints(updatedSprints);
-    
-  //   setToast({
-  //     open: true,
-  //     message: `${sprints.find(s => s.id === sprintId)?.name || 'Sprint'} started`,
-  //     type: 'success'
-  //   });
-  // };
-
   // Toggle sprint expanded state
-  // const toggleSprintExpanded = (sprintId) => {
-  //   setSprints(sprints.map(sprint => 
-  //     sprint.id === sprintId ? { ...sprint, expanded: !sprint.expanded } : sprint
-  //   ));
-  // };
+  const toggleSprintExpanded = (sprintId) => {
+    setSprints(sprints.map(sprint => 
+      sprint.id === sprintId ? { ...sprint, expanded: !sprint.expanded } : sprint
+    ));
+  };
 
-  // // Toggle backlog expanded state
-  // const toggleBacklogExpanded = () => {
-  //   setBacklogExpanded(!backlogExpanded);
-  // };
+  // Toggle backlog expanded state
+  const toggleBacklogExpanded = () => {
+    setBacklogExpanded(!backlogExpanded);
+  };
 
   // Get the name initials for avatars
   const getInitials = (name) => {
@@ -423,12 +533,12 @@ const Backlogpage = () => {
   return (
     <Box sx={{ bgcolor: '#f5f5f5', minHeight: '100vh', p: 3 }}>
   
-  {/* <CreateSprint 
+  <CreateSprint 
         projectKey={projectDetails?.key}
-        // onSprintCreated={handleSprintCreated}
+        onSprintCreated={handleSprintCreated}
         openDialog={sprintDialogOpen}
         onClose={handleCloseSprintDialog}
-      /> */}
+      />
       <Snackbar 
         open={toast.open} 
         autoHideDuration={6000} 
@@ -481,21 +591,21 @@ const Backlogpage = () => {
           
           <Box sx={{ ml: 'auto' }}>
             <Box>
-            {/* <Button
+            <Button
               variant="contained"
               color="primary"
               startIcon={<AddIcon />}
               onClick={goToCreateIssuePage}
             >
               Create Issue
-            </Button> */}
+            </Button>
             </Box>
             <Box sx={{mt:"15px"}}>
             <Button
                 variant="contained"
                 color="primary"
                 startIcon={<AddIcon />}
-                // onClick={createSprint} // This now opens the dialog instead of directly creating a sprint
+                onClick={createSprint}
               >
                 Create Sprint
               </Button>
@@ -528,7 +638,7 @@ const Backlogpage = () => {
                   cursor: 'pointer',
                   '&:hover': { bgcolor: '#f0f0f0' }
                 }}
-                // onClick={() => toggleSprintExpanded(sprint.id)}
+                onClick={() => toggleSprintExpanded(sprint.id)}
               >
                 <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <Box sx={{ display: 'flex', alignItems: 'center' }}>
@@ -551,46 +661,42 @@ const Backlogpage = () => {
                       <CalendarIcon fontSize="small" />
                     </IconButton>
                     <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>
-                      Add dates
+                      {new Date(sprint.startDate).toLocaleDateString()} - {new Date(sprint.endDate).toLocaleDateString()}
                     </Typography>
                   </Box>
                   <Box sx={{ display: 'flex', alignItems: 'center' }}>
                     <Typography variant="caption" color="text.secondary" sx={{ mr: 2 }}>
                       ({sprint.issues.length} issues)
                     </Typography>
-                    {/* <Avatar 
-                      sx={{ 
-                        height: 24, 
-                        width: 24, 
-                        bgcolor: '#0052CC',
-                        fontSize: '0.75rem',
-                        mr: 1
-                      }}
-                    >
-                      {sprint.issues.filter(i => i.status === 1).length}
-                    </Avatar>
-                    <Avatar 
-                      sx={{ 
-                        height: 24, 
-                        width: 24, 
-                        bgcolor: '#36B37E',
-                        fontSize: '0.75rem',
-                        mr: 2
-                      }}
-                    >
-                      0
-                    </Avatar> */}
-                    <Button
-                      variant="outlined"
-                      color="primary"
-                      size="small"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        // startSprint(sprint.id);
-                      }}
-                    >
-                      Start sprint
-                    </Button>
+                    {sprint.status === 'FUTURE' && (
+                      <Button
+                        variant="outlined"
+                        color="primary"
+                        size="small"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          startSprint(sprint.id);
+                        }}
+                      >
+                        Start sprint
+                      </Button>
+                    )}
+                    {sprint.status === 'ACTIVE' && (
+                      <Chip
+                        size="small"
+                        label="Active"
+                        color="primary"
+                        sx={{ mr: 1 }}
+                      />
+                    )}
+                    {sprint.status === 'COMPLETED' && (
+                      <Chip
+                        size="small"
+                        label="Completed"
+                        color="success"
+                        sx={{ mr: 1 }}
+                      />
+                    )}
                     <IconButton size="small" sx={{ ml: 1 }}>
                       <MoreVertIcon fontSize="small" />
                     </IconButton>
@@ -702,206 +808,166 @@ const Backlogpage = () => {
             </Paper>
           ))}
 
-          {/* Create issue button */}
-          <Button 
-            variant="text" 
-            color="primary" 
+          {/* Backlog section */}
+<Paper 
+  variant="outlined" 
+  sx={{ overflow: 'hidden', mb: 2 }}
+  onDragOver={handleDragOver}
+  onDrop={handleDropOnBacklog}
+>
+  <Box 
+    sx={{ 
+      borderBottom: backlogExpanded ? 1 : 0, 
+      borderColor: 'divider', 
+      bgcolor: '#f9f9f9', 
+      px: 2, 
+      py: 1.5,
+      cursor: 'pointer',
+      '&:hover': { bgcolor: '#f0f0f0' }
+    }}
+    onClick={toggleBacklogExpanded}
+  >
+    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+      <Box sx={{ display: 'flex', alignItems: 'center' }}>
+        <IconButton 
+          size="small" 
+          sx={{ p: 0.5, mr: 1 }}
+        >
+          <ExpandMoreIcon 
+            fontSize="small" 
+            sx={{ 
+              transform: backlogExpanded ? 'rotate(0deg)' : 'rotate(-90deg)',
+              transition: 'transform 0.2s'
+            }} 
+          />
+        </IconButton>
+        <Typography variant="subtitle1" fontWeight="500" color="text.primary">
+          Backlog
+        </Typography>
+        <Typography variant="caption" color="text.secondary" sx={{ ml: 2 }}>
+          ({filteredIssues.length} issues)
+        </Typography>
+      </Box>
+    </Box>
+  </Box>
+  
+  <Collapse in={backlogExpanded}>
+    {filteredIssues.length === 0 ? (
+      <Box sx={{ 
+        py: 4, 
+        display: 'flex', 
+        flexDirection: 'column', 
+        alignItems: 'center',
+        textAlign: 'center',
+        px: 2
+      }}>
+        <Typography variant="subtitle1" gutterBottom>
+          No issues found
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 600, mb: 2 }}>
+          {searchQuery ? 'No issues match your search criteria.' : 'Create your first issue to get started.'}
+        </Typography>
+        {!searchQuery && (
+          <Button
+            variant="contained"
+            color="primary"
             startIcon={<AddIcon />}
             onClick={goToCreateIssuePage}
-            sx={{ mb: 2 }}
           >
-            Create issue
+            Create Issue
           </Button>
-
-          {/* Backlog section */}
-          <Paper 
-            variant="outlined" 
-            sx={{ overflow: 'hidden', mb: 2 }}
-            onDragOver={handleDragOver}
-            onDrop={handleDropOnBacklog}
-          >
-            <Box 
-              sx={{ 
-                borderBottom: backlogExpanded ? 1 : 0, 
-                borderColor: 'divider', 
-                bgcolor: '#f9f9f9', 
-                px: 2, 
-                py: 1.5,
-                cursor: 'pointer',
-                '&:hover': { bgcolor: '#f0f0f0' }
-              }}
-              // onClick={toggleBacklogExpanded}
-            >
-              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <Box sx={{ display: 'flex', alignItems: 'center' }}>
-                  <IconButton 
-                    size="small" 
-                    sx={{ p: 0.5, mr: 1 }}
-                  >
-                    <ExpandMoreIcon 
-                      fontSize="small" 
-                      sx={{ 
-                        transform: backlogExpanded ? 'rotate(0deg)' : 'rotate(-90deg)',
-                        transition: 'transform 0.2s'
-                      }} 
-                    />
-                  </IconButton>
-                  <Typography variant="subtitle1" fontWeight="500" color="text.primary">
-                    Backlog
-                  </Typography>
-                </Box>
-                {/* <Box sx={{ display: 'flex', alignItems: 'center' }}>
-                  <Typography variant="caption" color="text.secondary" sx={{ mr: 2 }}>
-                    ({filteredIssues.length} issues)
-                  </Typography>
-                  <Avatar 
-                    sx={{ 
-                      height: 24, 
-                      width: 24, 
-                      bgcolor: '#0052CC',
-                      fontSize: '0.75rem',
-                      mr: 1
-                    }}
-                  >
-                    {filteredIssues.filter(i => i.status === 1).length}
-                  </Avatar>
-                  <Avatar 
-                    sx={{ 
-                      height: 24, 
-                      width: 24, 
-                      bgcolor: '#36B37E',
-                      fontSize: '0.75rem',
-                      mr: 2
-                    }}
-                  >
-                    0
-                  </Avatar>
-                </Box> */}
-              </Box>
-            </Box>
-            
-            <Collapse in={backlogExpanded}>
-              {!loading && filteredIssues.length > 0 ? (
-                <Box sx={{ p: 2 }}>
-                  <Grid container sx={{ fontSize: '0.75rem', fontWeight: 500, color: 'text.secondary', px: 2, py: 1 }}>
-                    <Grid item xs={6} sm={3} md={4}>SUMMARY</Grid>
-                    <Grid item xs={6} sm={3} md={2} sx={{ textAlign: 'center' }}>KEY</Grid>
-                    <Grid item xs={4} sm={2} md={2} sx={{ textAlign: 'center' }}>ASSIGNEE</Grid>
-                    <Grid item xs={4} sm={2} md={2} sx={{ textAlign: 'center' }}>STATUS</Grid>
-                    <Grid item xs={4} sm={2} md={2} sx={{ textAlign: 'center' }}>PRIORITY</Grid>
-                  </Grid>
-                  
-                  {/* Display all issues in the backlog */}
-                  {filteredIssues.map((issue) => (
-                    <Box 
-                      key={issue.id}
-                      onClick={() => navigate(`/project/${projectId}/backlog/issue/${issue.id}`)}
-                      draggable
-                      onDragStart={() => handleDragStart(issue.id)}
-                    >
-                      <Grid 
-                        container 
-                        alignItems="center"
-                        sx={{ 
-                          py: 1.5, 
-                          px: 2, 
-                          borderBottom: '1px solid #f0f0f0',
-                          '&:hover': { bgcolor: '#f9f9f9' },
-                          cursor: 'pointer' 
-                        }}
-                      >
-                        <Grid item xs={6} sm={3} md={4} sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                          <Box sx={{ display: 'flex', alignItems: 'center' }}>
-                            <DragIcon fontSize="small" sx={{ color: 'text.disabled', mr: 0.5 }} />
-                            <IssueTypeIcon type={issue.issueType} />
-                          </Box>
-                          <Typography variant="body2" fontWeight="500" color="text.primary">
-                            {issue.summary}
-                          </Typography>
-                        </Grid>
-                        <Grid item xs={6} sm={3} md={2} sx={{ textAlign: 'center' }}>
-                          <Typography variant="caption" color="text.secondary" fontWeight="500">
-                            {issue.key}
-                          </Typography>
-                        </Grid>
-                        <Grid item xs={4} sm={2} md={2} sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                          <Avatar 
-                            sx={{ 
-                              height: 24, 
-                              width: 24, 
-                              bgcolor: 'primary.main',
-                              fontSize: '0.75rem' 
-                            }}
-                          >
-                            {getInitials(issue.assignee)}
-                          </Avatar>
-                          <Typography 
-                            variant="caption" 
-                            sx={{ 
-                              ml: 1, 
-                              color: 'text.secondary',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              maxWidth: '80px',
-                              display: 'inline-block'
-                            }}
-                          >
-                            {issue.assignee || 'Unassigned'}
-                          </Typography>
-                        </Grid>
-                        <Grid item xs={4} sm={2} md={2} sx={{ display: 'flex', justifyContent: 'center' }} onClick={(e) => {
-                          e.stopPropagation();
-                          const nextStatus = (issue.status % 4) + 1;
-                          updateIssueStatus(issue.id, nextStatus);
-                        }}>
-                          <StatusBadge status={issue.status} />
-                        </Grid>
-                        <Grid item xs={4} sm={2} md={2} sx={{ display: 'flex', justifyContent: 'center' }}>
-                          <PriorityIcon priority={issue.priority} />
-                          <Typography variant="caption" color="text.secondary" fontWeight="500" sx={{ ml: 1 }}>
-                            {priorities.find(p => p.id === issue.priority)?.name || 'Medium'}
-                          </Typography>
-                        </Grid>
-                      </Grid>
-                    </Box>
-                  ))}
-                </Box>
-              ) : (
-                <Box sx={{ 
-                  py: 4, 
-                  display: 'flex', 
-                  flexDirection: 'column', 
-                  alignItems: 'center',
-                  textAlign: 'center',
-                  px: 2
-                }}>
-                  {loading ? (
-                    <CircularProgress size={24} sx={{ mb: 2 }} />
-                  ) : (
-                    <>
-                      <Typography variant="subtitle1" gutterBottom>
-                        No issues found
-                      </Typography>
-                      <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 600, mb: 2 }}>
-                        {searchQuery ? 
-                          'No issues match your search criteria. Try adjusting your filters.' : 
-                          'There are no issues in the backlog. Create an issue to get started.'}
-                      </Typography>
-                      <Button
-                        variant="contained"
-                        color="primary"
-                        startIcon={<AddIcon />}
-                        onClick={goToCreateIssuePage}
-                      >
-                        Create Issue
-                      </Button>
-                    </>
-                  )}
-                </Box>
-              )}
-            </Collapse>
-          </Paper>
+        )}
+      </Box>
+    ) : (
+      <Box sx={{ p: 2 }}>
+        <Grid container sx={{ fontSize: '0.75rem', fontWeight: 500, color: 'text.secondary', px: 2, py: 1 }}>
+          <Grid item xs={6} sm={3} md={4}>SUMMARY</Grid>
+          <Grid item xs={6} sm={3} md={2} sx={{ textAlign: 'center' }}>KEY</Grid>
+          <Grid item xs={4} sm={2} md={2} sx={{ textAlign: 'center' }}>ASSIGNEE</Grid>
+          <Grid item xs={4} sm={2} md={2} sx={{ textAlign: 'center' }}>STATUS</Grid>
+          <Grid item xs={4} sm={2} md={2} sx={{ textAlign: 'center' }}>PRIORITY</Grid>
         </Grid>
+        
+        {filteredIssues.map((issue) => (
+          <Box 
+            key={issue.id}
+            draggable
+            onDragStart={() => handleDragStart(issue.id)}
+            onClick={() => navigate(`/project/${projectId}/backlog/issue/${issue.id}`)}
+          >
+            <Grid 
+              container 
+              alignItems="center"
+              sx={{ 
+                py: 1.5, 
+                px: 2, 
+                borderBottom: '1px solid #f0f0f0',
+                '&:hover': { bgcolor: '#f9f9f9' },
+                cursor: 'pointer' 
+              }}
+            >
+              <Grid item xs={6} sm={3} md={4} sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                  <DragIcon fontSize="small" sx={{ color: 'text.disabled', mr: 0.5 }} />
+                  <IssueTypeIcon type={issue.issueType} />
+                </Box>
+                <Typography variant="body2" fontWeight="500" color="text.primary">
+                  {issue.summary}
+                </Typography>
+              </Grid>
+              <Grid item xs={6} sm={3} md={2} sx={{ textAlign: 'center' }}>
+                <Typography variant="caption" color="text.secondary" fontWeight="500">
+                  {issue.key}
+                </Typography>
+              </Grid>
+              <Grid item xs={4} sm={2} md={2} sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <Avatar 
+                  sx={{ 
+                    height: 24, 
+                    width: 24, 
+                    bgcolor: 'primary.main',
+                    fontSize: '0.75rem' 
+                  }}
+                >
+                  {getInitials(issue.assignee)}
+                </Avatar>
+                <Typography 
+                  variant="caption" 
+                  sx={{ 
+                    ml: 1, 
+                    color: 'text.secondary',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    maxWidth: '80px',
+                    display: 'inline-block'
+                  }}
+                >
+                  {issue.assignee || 'Unassigned'}
+                </Typography>
+              </Grid>
+              <Grid item xs={4} sm={2} md={2} sx={{ display: 'flex', justifyContent: 'center' }} onClick={(e) => {
+                e.stopPropagation();
+                const nextStatus = (issue.status % 4) + 1;
+                updateIssueStatus(issue.id, nextStatus);
+              }}>
+                <StatusBadge status={issue.status} />
+              </Grid>
+              <Grid item xs={4} sm={2} md={2} sx={{ display: 'flex', justifyContent: 'center' }}>
+                <PriorityIcon priority={issue.priority} />
+                <Typography variant="caption" color="text.secondary" fontWeight="500" sx={{ ml: 1 }}>
+                  {priorities.find(p => p.id === issue.priority)?.name || 'Medium'}
+                </Typography>
+              </Grid>
+            </Grid>
+          </Box>
+        ))}
+      </Box>
+    )}
+  </Collapse>
+</Paper>
+        </Grid>
+        
+        {/* Right sidebar */}
         <Grid item xs={12} md={3}>
         <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
             <Typography variant="subtitle2" sx={{ mb: 1.5 }}>Backlog Summary</Typography>
@@ -1014,10 +1080,8 @@ const Backlogpage = () => {
             )}
           </Paper>
           </Grid>
-        </Grid>
-        </Box>
-  
-    
+      </Grid>
+    </Box>
   );
 };
 

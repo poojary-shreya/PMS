@@ -579,7 +579,8 @@ if (rolePermissions[role]?.includes("projectManagement")) {
                     name: "Backlog",
                     path: `/project/${selectedProject.id}/backlog`,
                     key: `project-${selectedProject.id}-backlog`,
-                    submenu: [
+                  },
+                   
                       {
                         name: "Sprint",
                       
@@ -593,7 +594,7 @@ if (rolePermissions[role]?.includes("projectManagement")) {
                           { 
                             name: "Active Sprint", 
                             // path: `/project/${selectedProject.id}/backlog/sprint/active`,
-                            path:'/activesprintss',
+                            path:'/activesprint',
                             key: `project-${selectedProject.id}-backlog-sprint-active`
                           },
                           { 
@@ -603,8 +604,8 @@ if (rolePermissions[role]?.includes("projectManagement")) {
                           }
                         ]
                       }
-                    ]
-                  },
+                   ,
+                 
                   { name: "Calendar", path: `/project/${selectedProject.id}/calendar` },
                   {
                     name: "Dashboard", 
