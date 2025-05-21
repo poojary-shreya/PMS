@@ -1,0 +1,19 @@
+
+.home-container {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    background-color: skyblue;  
+  }
+  
+
+  .home-container .MuiContainer-root {
+    text-align: center;
+  }
+  
+  button {
+    margin-top: 20px;
+    width: 150px; 
+  }
+  
